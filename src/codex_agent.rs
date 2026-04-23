@@ -10,22 +10,18 @@ use agent_client_protocol::{
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionModeRequest,
     SetSessionModeResponse, SetSessionModelRequest, SetSessionModelResponse,
 };
+use codex_config::types::{McpServerConfig, McpServerTransportConfig};
 use codex_core::{
-    CodexAuth, NewThread, RolloutRecorder, ThreadManager, ThreadSortKey,
-    auth::AuthManager,
-    config::{
-        Config,
-        types::{McpServerConfig, McpServerTransportConfig},
-    },
-    find_thread_path_by_id_str,
-    models_manager::collaboration_mode_presets::CollaborationModesConfig,
-    parse_cursor,
+    NewThread, RolloutRecorder, ThreadManager, ThreadSortKey, config::Config,
+    find_thread_path_by_id_str, parse_cursor,
 };
 use codex_exec_server::EnvironmentManager;
 use codex_login::{
-    CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR,
+    AuthManager, CLIENT_ID, CODEX_API_KEY_ENV_VAR, CodexAuth, OPENAI_API_KEY_ENV_VAR,
+    ServerOptions,
     auth::{read_codex_api_key_from_env, read_openai_api_key_from_env},
 };
+use codex_models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_protocol::{
     ThreadId,
     protocol::{InitialHistory, SessionSource},
@@ -68,7 +64,7 @@ impl CodexAgent {
     /// Create a new `CodexAgent` with the given configuration
     pub fn new(config: Config) -> Self {
         let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
+            config.codex_home.clone().to_path_buf(),
             false,
             config.cli_auth_credentials_store_mode,
         );
@@ -84,6 +80,7 @@ impl CodexAgent {
                 default_mode_request_user_input: false,
             },
             Arc::new(EnvironmentManager::from_env()),
+            None,
         );
         Self {
             auth_manager,
@@ -153,6 +150,7 @@ impl CodexAgent {
                             },
                             required: false,
                             enabled: true,
+                            supports_parallel_tool_calls: false,
                             startup_timeout_sec: None,
                             tool_timeout_sec: None,
                             disabled_tools: None,
@@ -189,6 +187,7 @@ impl CodexAgent {
                             },
                             required: false,
                             enabled: true,
+                            supports_parallel_tool_calls: false,
                             startup_timeout_sec: None,
                             tool_timeout_sec: None,
                             disabled_tools: None,
@@ -276,9 +275,9 @@ impl Agent for CodexAgent {
         match auth_method {
             CodexAuthMethod::ChatGpt => {
                 // Perform browser/device login via codex-rs, then report success/failure to the client.
-                let opts = codex_login::ServerOptions::new(
-                    self.config.codex_home.clone(),
-                    codex_core::auth::CLIENT_ID.to_string(),
+                let opts = ServerOptions::new(
+                    self.config.codex_home.clone().to_path_buf(),
+                    CLIENT_ID.to_string(),
                     None,
                     self.config.cli_auth_credentials_store_mode,
                 );
@@ -405,7 +404,7 @@ impl Agent for CodexAgent {
         let rollout_items = match &history {
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
             InitialHistory::Forked(items) => items.clone(),
-            InitialHistory::New => Vec::new(),
+            InitialHistory::New | InitialHistory::Cleared => Vec::new(),
         };
 
         let config = self.build_session_config(&cwd, mcp_servers)?;
