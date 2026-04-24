@@ -174,6 +174,11 @@ if ! grep -q 'gh run download' .github/workflows/release.yml; then
   exit 1
 fi
 
+if ! grep -q 'downloaded-artifacts' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should flatten reused artifacts from a separate download directory${NC}"
+  exit 1
+fi
+
 if ! grep -q "tr -d '\\\\r\\\\n'" .github/workflows/release.yml; then
   echo -e "${RED}✗ Release workflow should sanitize NPM_TOKEN before npm publish${NC}"
   exit 1

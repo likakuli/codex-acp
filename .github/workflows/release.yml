@@ -319,13 +319,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts
+          mkdir -p downloaded-artifacts artifacts
           gh run download "${REUSE_RUN_ID}" \
             --repo "${{ github.repository }}" \
             --pattern "codex-acp-*" \
-            --dir artifacts
-          find artifacts -mindepth 2 -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} artifacts/ \;
-          find artifacts -mindepth 1 -type d -empty -delete
+            --dir downloaded-artifacts
+          find downloaded-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} artifacts/ \;
 
       - name: Validate release artifacts
         shell: bash
