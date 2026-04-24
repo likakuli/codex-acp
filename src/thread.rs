@@ -1376,17 +1376,17 @@ impl PromptState {
                     "Image generation ended: call_id={}, status={}",
                     event.call_id, event.status
                 );
-                let tool_status = if event.status == "success" {
+                let tool_status = if is_image_generation_success(&event) {
                     ToolCallStatus::Completed
                 } else {
                     ToolCallStatus::Failed
                 };
                 client
                     .send_tool_call_update(ToolCallUpdate::new(
-                        event.call_id,
+                        event.call_id.clone(),
                         ToolCallUpdateFields::new()
                             .status(tool_status)
-                            .content(vec![event.result.into()]),
+                            .content(build_image_generation_tool_content(&event)),
                     ))
                     .await;
             }
@@ -4149,6 +4149,83 @@ fn extract_slash_command(content: &[UserInput]) -> Option<(&str, &str)> {
     parse_slash_name(line)
 }
 
+fn is_image_generation_success(event: &codex_protocol::protocol::ImageGenerationEndEvent) -> bool {
+    if event.saved_path.is_some() || !event.result.trim().is_empty() {
+        return true;
+    }
+
+    matches!(
+        event.status.trim().to_ascii_lowercase().as_str(),
+        "success" | "completed"
+    )
+}
+
+fn build_image_generation_tool_content(
+    event: &codex_protocol::protocol::ImageGenerationEndEvent,
+) -> Vec<ToolCallContent> {
+    if let Some(resource_link) = build_image_generation_resource_link(event) {
+        return vec![ToolCallContent::Content(Content::new(
+            ContentBlock::ResourceLink(resource_link),
+        ))];
+    }
+
+    if event.result.trim().is_empty() {
+        return Vec::new();
+    }
+
+    vec![event.result.clone().into()]
+}
+
+fn build_image_generation_resource_link(
+    event: &codex_protocol::protocol::ImageGenerationEndEvent,
+) -> Option<ResourceLink> {
+    let default_file_name = format!("generated-image-{}.png", event.call_id);
+
+    if let Some(saved_path) = event
+        .saved_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .filter(|path| !path.trim().is_empty())
+    {
+        let file_name = Path::new(&saved_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(default_file_name.as_str())
+            .to_string();
+        let mime_type = infer_image_mime_type(&saved_path).unwrap_or("image/png");
+        return Some(ResourceLink::new(file_name, saved_path).mime_type(mime_type));
+    }
+
+    let base64_result = event.result.trim();
+    if base64_result.is_empty() {
+        return None;
+    }
+
+    Some(
+        ResourceLink::new(
+            default_file_name,
+            format!("data:image/png;base64,{base64_result}"),
+        )
+        .mime_type("image/png"),
+    )
+}
+
+fn infer_image_mime_type(path_or_name: &str) -> Option<&'static str> {
+    match Path::new(path_or_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("svg") => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -4834,6 +4911,13 @@ mod tests {
                 SessionUpdate::ToolCallUpdate(update)
                     if update.tool_call_id == "image-call".into()
                         && update.fields.status == Some(ToolCallStatus::Completed)
+                        && matches!(
+                            update.fields.content.as_deref(),
+                            Some([ToolCallContent::Content(Content {
+                                content: ContentBlock::ResourceLink(ResourceLink { uri, mime_type, .. }),
+                                ..
+                            })]) if uri == "data:image/png;base64,generated" && mime_type.as_deref() == Some("image/png")
+                        )
             )),
             "expected image generation completion update, got {notifications:?}"
         );
@@ -5353,7 +5437,7 @@ mod tests {
                         send(EventMsg::ImageGenerationEnd(
                             codex_protocol::protocol::ImageGenerationEndEvent {
                                 call_id: "image-call".to_string(),
-                                status: "success".to_string(),
+                                status: "generating".to_string(),
                                 revised_prompt: None,
                                 result: "generated".to_string(),
                                 saved_path: None,

@@ -16,6 +16,7 @@ use codex_core::{
     find_thread_path_by_id_str, parse_cursor,
 };
 use codex_exec_server::EnvironmentManager;
+use codex_features::Feature;
 use codex_login::{
     AuthManager, CLIENT_ID, CODEX_API_KEY_ENV_VAR, CodexAuth, OPENAI_API_KEY_ENV_VAR,
     ServerOptions,
@@ -121,6 +122,10 @@ impl CodexAgent {
     ) -> Result<Config, Error> {
         let mut config = self.config.clone();
         config.include_apply_patch_tool = true;
+        config
+            .features
+            .enable(Feature::ImageGeneration)
+            .map_err(Error::into_internal_error)?;
         config.cwd = cwd.try_into().map_err(Error::into_internal_error)?;
         let cwd = config.cwd.clone();
 
