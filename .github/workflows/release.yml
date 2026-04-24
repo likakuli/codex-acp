@@ -7,6 +7,10 @@ on:
         description: "Tag name for release (optional - uses version from Cargo.toml if not specified)"
         required: false
         type: string
+      reuse_artifacts_run_id:
+        description: "Previous workflow run id to reuse binary artifacts from (optional; skips Rust builds)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -39,6 +43,7 @@ jobs:
   build:
     name: Build - ${{ matrix.os }}
     needs: get-version
+    if: ${{ inputs.reuse_artifacts_run_id == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -288,9 +293,67 @@ jobs:
           path: ${{ steps.create_archive.outputs.archive_path }}
           retention-days: 1
 
+  collect-artifacts:
+    name: Collect Release Artifacts
+    needs: [get-version, build]
+    if: ${{ always() && (inputs.reuse_artifacts_run_id != '' || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Download current build artifacts
+        if: ${{ inputs.reuse_artifacts_run_id == '' }}
+        uses: actions/download-artifact@v5
+        with:
+          pattern: codex-acp-${{ needs.get-version.outputs.version }}-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Download reused build artifacts
+        if: ${{ inputs.reuse_artifacts_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_RUN_ID: ${{ inputs.reuse_artifacts_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          gh run download "${REUSE_RUN_ID}" \
+            --repo "${{ github.repository }}" \
+            --pattern "codex-acp-*" \
+            --dir artifacts
+          find artifacts -mindepth 2 -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec mv {} artifacts/ \;
+          find artifacts -mindepth 1 -type d -empty -delete
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.get-version.outputs.version }}"
+          count="$(
+            find artifacts -maxdepth 1 -type f \
+              \( -name "codex-acp-${version}-*.tar.gz" -o -name "codex-acp-${version}-*.zip" \) \
+              | wc -l \
+              | tr -d ' '
+          )"
+          if [ "${count}" -ne 8 ]; then
+            echo "Expected 8 binary artifacts for version ${version}, found ${count}."
+            find artifacts -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: artifacts/
+          retention-days: 1
+
   npm-packages:
     name: Create NPM Packages
-    needs: [get-version, build]
+    needs: [get-version, collect-artifacts]
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.create_packages.outputs.packages }}
@@ -307,8 +370,8 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
+          name: release-artifacts
           path: artifacts
-          merge-multiple: true
 
       - name: Display structure of downloaded files
         run: ls -la artifacts/
@@ -421,7 +484,7 @@ jobs:
 
   create-release:
     name: Create Release
-    needs: [get-version, build, publish-npm-base]
+    needs: [get-version, collect-artifacts, publish-npm-base]
     runs-on: ubuntu-latest
 
     steps:
@@ -430,6 +493,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
+          name: release-artifacts
           path: artifacts
 
       - name: Display structure of downloaded files

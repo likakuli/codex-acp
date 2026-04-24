@@ -159,4 +159,19 @@ if ! grep -q 'target_commitish: \${{ github.sha }}' .github/workflows/release.ym
   exit 1
 fi
 
+if ! grep -q 'reuse_artifacts_run_id' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should support reusing artifacts from a previous run${NC}"
+  exit 1
+fi
+
+if ! grep -q "inputs.reuse_artifacts_run_id == ''" .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should skip Rust builds when reusing artifacts${NC}"
+  exit 1
+fi
+
+if ! grep -q 'gh run download' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should download previous run artifacts when reuse_artifacts_run_id is set${NC}"
+  exit 1
+fi
+
 echo -e "${GREEN}✓ Release workflow publishing setup is fork-ready${NC}"
