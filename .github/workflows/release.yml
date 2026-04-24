@@ -416,6 +416,15 @@ jobs:
       - name: Update npm
         run: npm install -g npm@latest
 
+      - name: Sanitize npm token
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sanitized="$(printf '%s' "${NODE_AUTH_TOKEN}" | tr -d '\r\n')"
+          echo "::add-mask::${sanitized}"
+          echo "NODE_AUTH_TOKEN=${sanitized}" >> "$GITHUB_ENV"
+
       - name: Download NPM packages
         uses: actions/download-artifact@v5
         with:
@@ -458,6 +467,15 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Update npm
         run: npm install -g npm@latest
+
+      - name: Sanitize npm token
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sanitized="$(printf '%s' "${NODE_AUTH_TOKEN}" | tr -d '\r\n')"
+          echo "::add-mask::${sanitized}"
+          echo "NODE_AUTH_TOKEN=${sanitized}" >> "$GITHUB_ENV"
 
       - name: Download base package
         uses: actions/download-artifact@v5

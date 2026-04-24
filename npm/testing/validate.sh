@@ -174,4 +174,9 @@ if ! grep -q 'gh run download' .github/workflows/release.yml; then
   exit 1
 fi
 
+if ! grep -q "tr -d '\\\\r\\\\n'" .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should sanitize NPM_TOKEN before npm publish${NC}"
+  exit 1
+fi
+
 echo -e "${GREEN}✓ Release workflow publishing setup is fork-ready${NC}"
