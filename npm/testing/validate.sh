@@ -179,6 +179,11 @@ if ! grep -q 'downloaded-artifacts' .github/workflows/release.yml; then
   exit 1
 fi
 
+if ! grep -q "needs.collect-artifacts.result == 'success'" .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow downstream jobs should run after reused artifact collection succeeds${NC}"
+  exit 1
+fi
+
 if ! grep -q "tr -d '\\\\r\\\\n'" .github/workflows/release.yml; then
   echo -e "${RED}✗ Release workflow should sanitize NPM_TOKEN before npm publish${NC}"
   exit 1

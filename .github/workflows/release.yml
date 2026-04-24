@@ -353,6 +353,7 @@ jobs:
   npm-packages:
     name: Create NPM Packages
     needs: [get-version, collect-artifacts]
+    if: ${{ always() && needs.collect-artifacts.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.create_packages.outputs.packages }}
@@ -398,6 +399,7 @@ jobs:
   publish-npm-platform:
     name: Publish NPM Platform Packages
     needs: [get-version, npm-packages]
+    if: ${{ always() && needs.npm-packages.result == 'success' }}
     runs-on: ubuntu-latest
     environment: release # Optional: for enhanced security
     permissions:
@@ -450,6 +452,7 @@ jobs:
   publish-npm-base:
     name: Publish NPM Base Package
     needs: [get-version, npm-packages, publish-npm-platform]
+    if: ${{ always() && needs.npm-packages.result == 'success' && needs.publish-npm-platform.result == 'success' }}
     runs-on: ubuntu-latest
     environment: release # Optional: for enhanced security
     permissions:
@@ -502,6 +505,7 @@ jobs:
   create-release:
     name: Create Release
     needs: [get-version, collect-artifacts, publish-npm-base]
+    if: ${{ always() && needs.collect-artifacts.result == 'success' && needs.publish-npm-base.result == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
