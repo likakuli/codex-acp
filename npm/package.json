@@ -1,6 +1,6 @@
 {
   "name": "@likakuli/codex-acp",
-  "version": "0.121.0-patch.2",
+  "version": "0.121.0-patch.3",
   "type": "module",
   "description": "An ACP-compatible coding agent powered by Codex",
   "license": "Apache-2.0",
@@ -28,11 +28,11 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@likakuli/codex-acp-darwin-arm64": "0.121.0-patch.2",
-    "@likakuli/codex-acp-darwin-x64": "0.121.0-patch.2",
-    "@likakuli/codex-acp-linux-arm64": "0.121.0-patch.2",
-    "@likakuli/codex-acp-linux-x64": "0.121.0-patch.2",
-    "@likakuli/codex-acp-win32-arm64": "0.121.0-patch.2",
-    "@likakuli/codex-acp-win32-x64": "0.121.0-patch.2"
+    "@likakuli/codex-acp-darwin-arm64": "0.121.0-patch.3",
+    "@likakuli/codex-acp-darwin-x64": "0.121.0-patch.3",
+    "@likakuli/codex-acp-linux-arm64": "0.121.0-patch.3",
+    "@likakuli/codex-acp-linux-x64": "0.121.0-patch.3",
+    "@likakuli/codex-acp-win32-arm64": "0.121.0-patch.3",
+    "@likakuli/codex-acp-win32-x64": "0.121.0-patch.3"
   }
 }

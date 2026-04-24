@@ -371,7 +371,7 @@ jobs:
             if [ -d "$pkg" ]; then
               echo "Publishing $(basename $pkg)..."
               cd "$pkg"
-              npm publish --access public
+              npm publish --access public --tag latest
               cd ../..
             fi
           done
@@ -417,7 +417,7 @@ jobs:
         if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           cd npm
-          npm publish --access public
+          npm publish --access public --tag latest
 
   create-release:
     name: Create Release

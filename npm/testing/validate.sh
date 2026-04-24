@@ -139,6 +139,11 @@ if ! grep -q 'npm publish --access public' .github/workflows/release.yml; then
   exit 1
 fi
 
+if ! grep -q 'npm publish --access public --tag latest' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should publish prerelease npm versions with an explicit dist-tag${NC}"
+  exit 1
+fi
+
 if ! grep -q 'HAS_MACOS_SIGNING' .github/workflows/release.yml || ! grep -q 'HAS_WINDOWS_SIGNING' .github/workflows/release.yml; then
   echo -e "${RED}✗ Release workflow should make macOS/Windows signing optional${NC}"
   exit 1
