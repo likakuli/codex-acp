@@ -33,7 +33,7 @@ jobs:
           if [ -n "${{ github.event.inputs.tag_name }}" ]; then
             echo "tag_name=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag_name=v$VERSION" >> $GITHUB_OUTPUT
+            echo "tag_name=codex-rs-v$VERSION" >> $GITHUB_OUTPUT
           fi
 
   build:
@@ -68,6 +68,9 @@ jobs:
             binary_extension: ".exe"
 
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_MACOS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.APPLE_NOTARIZATION_KEY != '' && secrets.APPLE_NOTARIZATION_KEY_ID != '' && secrets.APPLE_NOTARIZATION_ISSUER_ID != '' }}
+      HAS_WINDOWS_SIGNING: ${{ secrets.AZURE_SIGNING_TENANT_ID != '' && secrets.AZURE_SIGNING_CLIENT_ID != '' && secrets.AZURE_SIGNING_CLIENT_SECRET != '' && vars.AZURE_SIGNING_ACCOUNT_NAME != '' && vars.AZURE_SIGNING_CERT_PROFILE_NAME != '' && vars.AZURE_SIGNING_ENDPOINT != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -222,7 +225,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Code sign macOS binary
-        if: startsWith(matrix.os, 'macos')
+        if: ${{ startsWith(matrix.os, 'macos') && env.HAS_MACOS_SIGNING == 'true' }}
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -232,8 +235,13 @@ jobs:
         run: |
           ./script/sign-mac target/${{ matrix.target }}/release/codex-acp
 
+      - name: Skip macOS code signing
+        if: ${{ startsWith(matrix.os, 'macos') && env.HAS_MACOS_SIGNING != 'true' }}
+        run: |
+          echo "Skipping macOS code signing because signing secrets are not configured."
+
       - name: Code sign Windows binary
-        if: startsWith(matrix.os, 'windows')
+        if: ${{ startsWith(matrix.os, 'windows') && env.HAS_WINDOWS_SIGNING == 'true' }}
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
@@ -246,6 +254,11 @@ jobs:
           TIMESTAMP_SERVER: http://timestamp.acs.microsoft.com
         run: |
           .\script\sign-windows.ps1 target\${{ matrix.target }}\release\codex-acp.exe
+
+      - name: Skip Windows code signing
+        if: ${{ startsWith(matrix.os, 'windows') && env.HAS_WINDOWS_SIGNING != 'true' }}
+        run: |
+          echo "Skipping Windows code signing because signing secrets are not configured."
 
       - name: Create archive
         id: create_archive
@@ -324,11 +337,12 @@ jobs:
     name: Publish NPM Platform Packages
     needs: [get-version, npm-packages]
     runs-on: ubuntu-latest
-    if: ${{ !github.event.repository.fork }}
     environment: release # Optional: for enhanced security
     permissions:
       contents: read
       id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Setup Node.js
@@ -345,13 +359,19 @@ jobs:
           name: npm-packages
           path: npm-packages
 
+      - name: Skip npm platform publish without token
+        if: ${{ env.NODE_AUTH_TOKEN == '' }}
+        run: |
+          echo "Skipping npm platform package publish because secrets.NPM_TOKEN is not configured."
+
       - name: Publish platform packages
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           for pkg in npm-packages/*; do
             if [ -d "$pkg" ]; then
               echo "Publishing $(basename $pkg)..."
               cd "$pkg"
-              npm publish
+              npm publish --access public
               cd ../..
             fi
           done
@@ -360,11 +380,12 @@ jobs:
     name: Publish NPM Base Package
     needs: [get-version, npm-packages, publish-npm-platform]
     runs-on: ubuntu-latest
-    if: ${{ !github.event.repository.fork }}
     environment: release # Optional: for enhanced security
     permissions:
       contents: read
       id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Setup Node.js
@@ -382,14 +403,21 @@ jobs:
           path: npm
 
       - name: Wait for platform packages to be available
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           echo "Waiting 30 seconds for platform packages to be available on npm..."
           sleep 30
 
+      - name: Skip npm base publish without token
+        if: ${{ env.NODE_AUTH_TOKEN == '' }}
+        run: |
+          echo "Skipping npm base package publish because secrets.NPM_TOKEN is not configured."
+
       - name: Publish base package
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           cd npm
-          npm publish
+          npm publish --access public
 
   create-release:
     name: Create Release
@@ -412,6 +440,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.get-version.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           name: Release ${{ needs.get-version.outputs.version }}
           draft: false
           prerelease: false

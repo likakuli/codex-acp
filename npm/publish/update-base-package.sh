@@ -23,12 +23,12 @@ fi
 sed -i.bak "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$PACKAGE_JSON"
 
 # Update optionalDependencies versions
-sed -i.bak "s/\"codex-acp-darwin-arm64\": \".*\"/\"codex-acp-darwin-arm64\": \"$VERSION\"/" "$PACKAGE_JSON"
-sed -i.bak "s/\"codex-acp-darwin-x64\": \".*\"/\"codex-acp-darwin-x64\": \"$VERSION\"/" "$PACKAGE_JSON"
-sed -i.bak "s/\"codex-acp-linux-arm64\": \".*\"/\"codex-acp-linux-arm64\": \"$VERSION\"/" "$PACKAGE_JSON"
-sed -i.bak "s/\"codex-acp-linux-x64\": \".*\"/\"codex-acp-linux-x64\": \"$VERSION\"/" "$PACKAGE_JSON"
-sed -i.bak "s/\"codex-acp-win32-arm64\": \".*\"/\"codex-acp-win32-arm64\": \"$VERSION\"/" "$PACKAGE_JSON"
-sed -i.bak "s/\"codex-acp-win32-x64\": \".*\"/\"codex-acp-win32-x64\": \"$VERSION\"/" "$PACKAGE_JSON"
+sed -i.bak "s|\"@likakuli/codex-acp-darwin-arm64\": \".*\"|\"@likakuli/codex-acp-darwin-arm64\": \"$VERSION\"|" "$PACKAGE_JSON"
+sed -i.bak "s|\"@likakuli/codex-acp-darwin-x64\": \".*\"|\"@likakuli/codex-acp-darwin-x64\": \"$VERSION\"|" "$PACKAGE_JSON"
+sed -i.bak "s|\"@likakuli/codex-acp-linux-arm64\": \".*\"|\"@likakuli/codex-acp-linux-arm64\": \"$VERSION\"|" "$PACKAGE_JSON"
+sed -i.bak "s|\"@likakuli/codex-acp-linux-x64\": \".*\"|\"@likakuli/codex-acp-linux-x64\": \"$VERSION\"|" "$PACKAGE_JSON"
+sed -i.bak "s|\"@likakuli/codex-acp-win32-arm64\": \".*\"|\"@likakuli/codex-acp-win32-arm64\": \"$VERSION\"|" "$PACKAGE_JSON"
+sed -i.bak "s|\"@likakuli/codex-acp-win32-x64\": \".*\"|\"@likakuli/codex-acp-win32-x64\": \"$VERSION\"|" "$PACKAGE_JSON"
 
 # Remove backup file
 rm -f "$PACKAGE_JSON.bak"
