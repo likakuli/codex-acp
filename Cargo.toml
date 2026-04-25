@@ -1,12 +1,12 @@
 [package]
 name = "codex-acp"
-version = "0.12.0"
+version = "0.124.0-patch.1"
 edition = "2024"
 authors = ["Zed <hi@zed.dev>"]
 license = "Apache-2.0"
 description = "An ACP-compatible coding agent powered by Codex"
-repository = "https://github.com/zed-industries/codex-acp"
-homepage = "https://github.com/zed-industries/codex-acp"
+repository = "https://github.com/likakuli/codex-acp"
+homepage = "https://github.com/likakuli/codex-acp"
 
 [[bin]]
 name = "codex-acp"
@@ -26,6 +26,7 @@ codex-arg0 = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-config = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-core = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-exec-server = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
+codex-features = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-mcp-server = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-models-manager = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-protocol = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }

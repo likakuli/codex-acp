@@ -1,17 +1,17 @@
 {
-  "name": "@zed-industries/codex-acp",
-  "version": "0.12.0",
+  "name": "@likakuli/codex-acp",
+  "version": "0.124.0-patch.1",
   "type": "module",
   "description": "An ACP-compatible coding agent powered by Codex",
   "license": "Apache-2.0",
-  "author": "Zed <hi@zed.dev>",
-  "homepage": "https://github.com/zed-industries/codex-acp",
+  "author": "likakuli",
+  "homepage": "https://github.com/likakuli/codex-acp",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zed-industries/codex-acp.git"
+    "url": "git+https://github.com/likakuli/codex-acp.git"
   },
   "bugs": {
-    "url": "https://github.com/zed-industries/codex-acp/issues"
+    "url": "https://github.com/likakuli/codex-acp/issues"
   },
   "keywords": [
     "codex",
@@ -28,11 +28,11 @@
     "bin"
   ],
   "optionalDependencies": {
-    "@zed-industries/codex-acp-darwin-arm64": "0.12.0",
-    "@zed-industries/codex-acp-darwin-x64": "0.12.0",
-    "@zed-industries/codex-acp-linux-arm64": "0.12.0",
-    "@zed-industries/codex-acp-linux-x64": "0.12.0",
-    "@zed-industries/codex-acp-win32-arm64": "0.12.0",
-    "@zed-industries/codex-acp-win32-x64": "0.12.0"
+    "@likakuli/codex-acp-darwin-arm64": "0.124.0-patch.1",
+    "@likakuli/codex-acp-darwin-x64": "0.124.0-patch.1",
+    "@likakuli/codex-acp-linux-arm64": "0.124.0-patch.1",
+    "@likakuli/codex-acp-linux-x64": "0.124.0-patch.1",
+    "@likakuli/codex-acp-win32-arm64": "0.124.0-patch.1",
+    "@likakuli/codex-acp-win32-x64": "0.124.0-patch.1"
   }
 }

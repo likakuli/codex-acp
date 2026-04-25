@@ -42,7 +42,7 @@ Or try it with any of the other [ACP compatible clients](https://agentclientprot
 
 #### Installation
 
-Install the adapter from the latest release for your architecture and OS: https://github.com/zed-industries/codex-acp/releases
+Install the adapter from the latest release for your architecture and OS: https://github.com/likakuli/codex-acp/releases
 
 You can then use `codex-acp` as a regular ACP agent:
 
@@ -53,7 +53,7 @@ OPENAI_API_KEY=sk-... codex-acp
 Or via npm:
 
 ```
-npx @zed-industries/codex-acp
+npx @likakuli/codex-acp
 ```
 
 ## License

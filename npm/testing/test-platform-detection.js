@@ -35,18 +35,18 @@ function getPlatformPackage() {
     process.exit(1);
   }
 
-  return packageName;
+  return `@likakuli/${packageName}`;
 }
 
 // Test all known platform/arch combinations
 function testAllPlatforms() {
   const testCases = [
-    { platform: "darwin", arch: "arm64", expected: "codex-acp-darwin-arm64" },
-    { platform: "darwin", arch: "x64", expected: "codex-acp-darwin-x64" },
-    { platform: "linux", arch: "arm64", expected: "codex-acp-linux-arm64" },
-    { platform: "linux", arch: "x64", expected: "codex-acp-linux-x64" },
-    { platform: "win32", arch: "arm64", expected: "codex-acp-win32-arm64" },
-    { platform: "win32", arch: "x64", expected: "codex-acp-win32-x64" },
+    { platform: "darwin", arch: "arm64", expected: "@likakuli/codex-acp-darwin-arm64" },
+    { platform: "darwin", arch: "x64", expected: "@likakuli/codex-acp-darwin-x64" },
+    { platform: "linux", arch: "arm64", expected: "@likakuli/codex-acp-linux-arm64" },
+    { platform: "linux", arch: "x64", expected: "@likakuli/codex-acp-linux-x64" },
+    { platform: "win32", arch: "arm64", expected: "@likakuli/codex-acp-win32-arm64" },
+    { platform: "win32", arch: "x64", expected: "@likakuli/codex-acp-win32-x64" },
   ];
 
   console.log("Testing platform detection logic...\n");

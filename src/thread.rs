@@ -41,8 +41,9 @@ use codex_protocol::{
     config_types::TrustLevel,
     dynamic_tools::{DynamicToolCallOutputContentItem, DynamicToolCallRequest},
     error::CodexErr,
+    items::TurnItem,
     mcp::CallToolResult,
-    models::{PermissionProfile, ResponseItem, WebSearchAction},
+    models::{MessagePhase, PermissionProfile, ResponseItem, WebSearchAction},
     openai_models::{ModelPreset, ReasoningEffort},
     parse_command::ParsedCommand,
     permissions::{
@@ -737,6 +738,7 @@ struct PromptState {
     active_commands: HashMap<String, ActiveCommand>,
     active_web_search: Option<String>,
     active_guardian_assessments: HashSet<String>,
+    agent_message_phases: HashMap<String, MessagePhase>,
     thread: Arc<dyn CodexThreadImpl>,
     resolution_tx: mpsc::UnboundedSender<ThreadMessage>,
     pending_permission_interactions: HashMap<String, PendingPermissionInteraction>,
@@ -758,6 +760,7 @@ impl PromptState {
             active_commands: HashMap::new(),
             active_web_search: None,
             active_guardian_assessments: HashSet::new(),
+            agent_message_phases: HashMap::new(),
             thread,
             resolution_tx,
             pending_permission_interactions: HashMap::new(),
@@ -779,6 +782,31 @@ impl PromptState {
         for (_, interaction) in self.pending_permission_interactions.drain() {
             interaction.task.abort();
         }
+    }
+
+    fn record_agent_message_phase(&mut self, item: &TurnItem) {
+        if let TurnItem::AgentMessage(agent_message) = item {
+            if let Some(phase) = agent_message.phase.clone() {
+                self.agent_message_phases
+                    .insert(agent_message.id.clone(), phase);
+            } else {
+                self.agent_message_phases.remove(&agent_message.id);
+            }
+        }
+    }
+
+    fn clear_turn_state(&mut self) {
+        self.agent_message_phases.clear();
+        self.seen_message_deltas = false;
+        self.seen_reasoning_deltas = false;
+    }
+
+    fn should_forward_agent_message_phase(phase: Option<&MessagePhase>) -> bool {
+        !matches!(phase, Some(MessagePhase::Commentary))
+    }
+
+    fn should_forward_agent_message_delta(&self, item_id: &str) -> bool {
+        Self::should_forward_agent_message_phase(self.agent_message_phases.get(item_id))
     }
 
     fn spawn_permission_request(
@@ -987,6 +1015,7 @@ impl PromptState {
                 turn_id,
                 started_at: _,
             }) => {
+                self.clear_turn_state();
                 info!("Task started with context window of {turn_id} {model_context_window:?} {collaboration_mode_kind:?}");
             }
             EventMsg::TokenCount(TokenCountEvent { info, .. }) => {
@@ -1000,6 +1029,7 @@ impl PromptState {
                     }
             }
             EventMsg::ItemStarted(ItemStartedEvent { thread_id, turn_id, item }) => {
+                self.record_agent_message_phase(&item);
                 info!("Item started with thread_id: {thread_id}, turn_id: {turn_id}, item: {item:?}");
             }
             EventMsg::UserMessage(UserMessageEvent {
@@ -1017,8 +1047,10 @@ impl PromptState {
                 delta,
             }) => {
                 info!("Agent message content delta received: thread_id: {thread_id}, turn_id: {turn_id}, item_id: {item_id}, delta: {delta:?}");
-                self.seen_message_deltas = true;
-                client.send_agent_text(delta);
+                if self.should_forward_agent_message_delta(&item_id) {
+                    self.seen_message_deltas = true;
+                    client.send_agent_text(delta);
+                }
             }
             EventMsg::ReasoningContentDelta(ReasoningContentDeltaEvent {
                 thread_id,
@@ -1047,8 +1079,11 @@ impl PromptState {
                 self.seen_reasoning_deltas = true;
                 client.send_agent_thought("\n\n");
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message , phase: _, memory_citation: _ }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, phase, memory_citation: _ }) => {
                 info!("Agent message (non-delta) received: {message:?}");
+                if !Self::should_forward_agent_message_phase(phase.as_ref()) {
+                    return;
+                }
                 // We didn't receive this message via streaming
                 if !std::mem::take(&mut self.seen_message_deltas) {
                     client.send_agent_text(message);
@@ -1199,6 +1234,7 @@ impl PromptState {
                 turn_id,
                 item,
             }) => {
+                self.record_agent_message_phase(&item);
                 info!("Item completed: thread_id={}, turn_id={}, item={:?}", thread_id, turn_id, item);
             }
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message, turn_id, completed_at: _, duration_ms: _, time_to_first_token_ms: _, }) => {
@@ -1340,10 +1376,34 @@ impl PromptState {
                 self.guardian_assessment(client, event);
             }
 
+            EventMsg::ImageGenerationBegin(event) => {
+                info!("Image generation started: call_id={}", event.call_id);
+                client.send_tool_call(
+                    ToolCall::new(event.call_id, "Generating image")
+                        .kind(ToolKind::Other)
+                        .status(ToolCallStatus::InProgress),
+                );
+            }
+            EventMsg::ImageGenerationEnd(event) => {
+                info!(
+                    "Image generation ended: call_id={}, status={}",
+                    event.call_id, event.status
+                );
+                let tool_status = if is_image_generation_success(&event) {
+                    ToolCallStatus::Completed
+                } else {
+                    ToolCallStatus::Failed
+                };
+                client.send_tool_call_update(ToolCallUpdate::new(
+                    event.call_id.clone(),
+                    ToolCallUpdateFields::new()
+                        .status(tool_status)
+                        .content(build_image_generation_tool_content(&event)),
+                ));
+            }
+
             // Ignore these events
-            EventMsg::ImageGenerationBegin(..)
-            | EventMsg::ImageGenerationEnd(..)
-            | EventMsg::AgentReasoningRawContent(..)
+            EventMsg::AgentReasoningRawContent(..)
             | EventMsg::ThreadRolledBack(..)
             | EventMsg::HookStarted(..)
             | EventMsg::HookCompleted(..)
@@ -3365,10 +3425,12 @@ impl<A: Auth> ThreadActor<A> {
             }
             EventMsg::AgentMessage(AgentMessageEvent {
                 message,
-                phase: _,
+                phase,
                 memory_citation: _,
             }) => {
-                self.client.send_agent_text(message.clone());
+                if PromptState::should_forward_agent_message_phase(phase.as_ref()) {
+                    self.client.send_agent_text(message.clone());
+                }
             }
             EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
                 self.client.send_agent_thought(text.clone());
@@ -4022,6 +4084,83 @@ fn extract_slash_command(content: &[UserInput]) -> Option<(&str, &str)> {
     Some((name, rest))
 }
 
+fn is_image_generation_success(event: &codex_protocol::protocol::ImageGenerationEndEvent) -> bool {
+    if event.saved_path.is_some() || !event.result.trim().is_empty() {
+        return true;
+    }
+
+    matches!(
+        event.status.trim().to_ascii_lowercase().as_str(),
+        "success" | "completed"
+    )
+}
+
+fn build_image_generation_tool_content(
+    event: &codex_protocol::protocol::ImageGenerationEndEvent,
+) -> Vec<ToolCallContent> {
+    if let Some(resource_link) = build_image_generation_resource_link(event) {
+        return vec![ToolCallContent::Content(Content::new(
+            ContentBlock::ResourceLink(resource_link),
+        ))];
+    }
+
+    if event.result.trim().is_empty() {
+        return Vec::new();
+    }
+
+    vec![event.result.clone().into()]
+}
+
+fn build_image_generation_resource_link(
+    event: &codex_protocol::protocol::ImageGenerationEndEvent,
+) -> Option<ResourceLink> {
+    let default_file_name = format!("generated-image-{}.png", event.call_id);
+
+    if let Some(saved_path) = event
+        .saved_path
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .filter(|path| !path.trim().is_empty())
+    {
+        let file_name = Path::new(&saved_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(default_file_name.as_str())
+            .to_string();
+        let mime_type = infer_image_mime_type(&saved_path).unwrap_or("image/png");
+        return Some(ResourceLink::new(file_name, saved_path).mime_type(mime_type));
+    }
+
+    let base64_result = event.result.trim();
+    if base64_result.is_empty() {
+        return None;
+    }
+
+    Some(
+        ResourceLink::new(
+            default_file_name,
+            format!("data:image/png;base64,{base64_result}"),
+        )
+        .mime_type("image/png"),
+    )
+}
+
+fn infer_image_mime_type(path_or_name: &str) -> Option<&'static str> {
+    match Path::new(path_or_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg") | Some("jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("svg") => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -4407,6 +4546,206 @@ mod tests {
                 ..
             }) if text == "test delta"
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_commentary_delta_is_dropped_without_suppressing_final_message()
+    -> anyhow::Result<()> {
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::new());
+        let session_client = SessionClient::with_client(session_id, client.clone(), Arc::default());
+        let thread = Arc::new(StubCodexThread::new());
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let (message_tx, _message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut prompt_state =
+            PromptState::new("submission-id".to_string(), thread, message_tx, response_tx);
+
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::ItemStarted(ItemStartedEvent {
+                    thread_id: codex_protocol::ThreadId::default(),
+                    turn_id: "turn-id".to_string(),
+                    item: TurnItem::AgentMessage(codex_protocol::items::AgentMessageItem {
+                        id: "commentary-item".to_string(),
+                        content: vec![codex_protocol::items::AgentMessageContent::Text {
+                            text: "looking around".to_string(),
+                        }],
+                        phase: Some(MessagePhase::Commentary),
+                        memory_citation: None,
+                    }),
+                }),
+            )
+            .await;
+
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                    thread_id: "thread-id".to_string(),
+                    turn_id: "turn-id".to_string(),
+                    item_id: "commentary-item".to_string(),
+                    delta: "looking around".to_string(),
+                }),
+            )
+            .await;
+
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "final answer".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                }),
+            )
+            .await;
+
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::TurnComplete(TurnCompleteEvent {
+                    last_agent_message: None,
+                    turn_id: "turn-id".to_string(),
+                    completed_at: None,
+                    duration_ms: None,
+                    time_to_first_token_ms: None,
+                }),
+            )
+            .await;
+
+        let notifications = client.notifications.lock().unwrap();
+        assert_eq!(
+            notifications.len(),
+            1,
+            "commentary delta should not leak or consume final message: {notifications:?}"
+        );
+        assert!(matches!(
+            &notifications[0].update,
+            SessionUpdate::AgentMessageChunk(ContentChunk {
+                content: ContentBlock::Text(TextContent { text, .. }),
+                ..
+            }) if text == "final answer"
+        ));
+
+        drop(notifications);
+        let stop_reason = response_rx.await??;
+        assert_eq!(stop_reason, StopReason::EndTurn);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replay_drops_commentary_but_keeps_other_agent_messages() -> anyhow::Result<()> {
+        let (_session_id, client, _, message_tx, _handle) = setup().await?;
+        let (replay_response_tx, replay_response_rx) = tokio::sync::oneshot::channel();
+
+        message_tx.send(ThreadMessage::ReplayHistory {
+            history: vec![
+                RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "commentary".to_string(),
+                    phase: Some(MessagePhase::Commentary),
+                    memory_citation: None,
+                })),
+                RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "unknown".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                })),
+                RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+                    message: "final".to_string(),
+                    phase: Some(MessagePhase::FinalAnswer),
+                    memory_citation: None,
+                })),
+            ],
+            response_tx: replay_response_tx,
+        })?;
+
+        replay_response_rx.await??;
+        drop(message_tx);
+
+        let notifications = client.notifications.lock().unwrap();
+        let agent_messages: Vec<_> = notifications
+            .iter()
+            .filter_map(|notification| match &notification.update {
+                SessionUpdate::AgentMessageChunk(ContentChunk {
+                    content: ContentBlock::Text(TextContent { text, .. }),
+                    ..
+                }) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(agent_messages, vec!["unknown", "final"]);
+        assert!(
+            !agent_messages.contains(&"commentary"),
+            "commentary should be filtered during replay"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_image_generation_events_are_surfaced() -> anyhow::Result<()> {
+        let session_id = SessionId::new("test");
+        let client = Arc::new(StubClient::new());
+        let session_client = SessionClient::with_client(session_id, client.clone(), Arc::default());
+        let thread = Arc::new(StubCodexThread::new());
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        let (message_tx, _message_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut prompt_state =
+            PromptState::new("submission-id".to_string(), thread, message_tx, response_tx);
+
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::ImageGenerationBegin(
+                    codex_protocol::protocol::ImageGenerationBeginEvent {
+                        call_id: "image-call".to_string(),
+                    },
+                ),
+            )
+            .await;
+        prompt_state
+            .handle_event(
+                &session_client,
+                EventMsg::ImageGenerationEnd(codex_protocol::protocol::ImageGenerationEndEvent {
+                    call_id: "image-call".to_string(),
+                    status: "completed".to_string(),
+                    revised_prompt: None,
+                    result: "generated".to_string(),
+                    saved_path: None,
+                }),
+            )
+            .await;
+
+        let notifications = client.notifications.lock().unwrap();
+        assert!(
+            notifications.iter().any(|notification| matches!(
+                &notification.update,
+                SessionUpdate::ToolCall(tool_call)
+                    if tool_call.title == "Generating image"
+                        && tool_call.status == ToolCallStatus::InProgress
+            )),
+            "expected image generation tool call start, got {notifications:?}"
+        );
+        assert!(
+            notifications.iter().any(|notification| matches!(
+                &notification.update,
+                SessionUpdate::ToolCallUpdate(update)
+                    if update.tool_call_id == "image-call".into()
+                        && update.fields.status == Some(ToolCallStatus::Completed)
+                        && matches!(
+                            update.fields.content.as_deref(),
+                            Some([ToolCallContent::Content(Content {
+                                content: ContentBlock::ResourceLink(ResourceLink { uri, mime_type, .. }),
+                                ..
+                            })]) if uri == "data:image/png;base64,generated" && mime_type.as_deref() == Some("image/png")
+                        )
+            )),
+            "expected image generation completion update, got {notifications:?}"
+        );
 
         Ok(())
     }

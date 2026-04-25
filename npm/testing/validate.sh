@@ -7,6 +7,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
+PACKAGE_SCOPE="@likakuli"
+BASE_PACKAGE="${PACKAGE_SCOPE}/codex-acp"
 
 echo "NPM Package Setup Validation"
 echo "============================="
@@ -73,15 +75,36 @@ fi
 echo -e "${GREEN}✓ Versions are in sync${NC}"
 echo
 
+# 4b. Verify fork package ownership
+echo "4b. Checking package ownership..."
+BASE_PACKAGE_NAME=$(node -e "console.log(require('./npm/package.json').name)")
+echo "   Base package name: $BASE_PACKAGE_NAME"
+if [ "$BASE_PACKAGE_NAME" != "$BASE_PACKAGE" ]; then
+  echo -e "${RED}✗ Base package name must be $BASE_PACKAGE${NC}"
+  exit 1
+fi
+
+if ! grep -q "@likakuli/\${packageName}" npm/bin/codex-acp.js; then
+  echo -e "${RED}✗ Wrapper does not resolve platform packages from ${PACKAGE_SCOPE}${NC}"
+  exit 1
+fi
+
+if ! grep -q '"name": "@likakuli/${PACKAGE_NAME}"' npm/template/package.json; then
+  echo -e "${RED}✗ Platform package template does not use ${PACKAGE_SCOPE}${NC}"
+  exit 1
+fi
+echo -e "${GREEN}✓ Package ownership uses ${PACKAGE_SCOPE}${NC}"
+echo
+
 # 5. Verify optional dependencies list
 echo "5. Verifying platform packages..."
 EXPECTED_PACKAGES=(
-  "@zed-industries/codex-acp-darwin-arm64"
-  "@zed-industries/codex-acp-darwin-x64"
-  "@zed-industries/codex-acp-linux-arm64"
-  "@zed-industries/codex-acp-linux-x64"
-  "@zed-industries/codex-acp-win32-arm64"
-  "@zed-industries/codex-acp-win32-x64"
+  "@likakuli/codex-acp-darwin-arm64"
+  "@likakuli/codex-acp-darwin-x64"
+  "@likakuli/codex-acp-linux-arm64"
+  "@likakuli/codex-acp-linux-x64"
+  "@likakuli/codex-acp-win32-arm64"
+  "@likakuli/codex-acp-win32-x64"
 )
 
 missing_packages=0
