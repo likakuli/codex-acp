@@ -56,6 +56,16 @@ Or via npm:
 npx @likakuli/codex-acp
 ```
 
+Plugin enablement is read from Codex `config.toml` by default. To override it
+for a single ACP process, pass plugin flags:
+
+```
+npx @likakuli/codex-acp --disable-plugin browser-use@openai-bundled
+npx @likakuli/codex-acp --enable-plugin browser-use@openai-bundled
+```
+
+The flags can be repeated or comma-separated.
+
 ## License
 
 Apache-2.0

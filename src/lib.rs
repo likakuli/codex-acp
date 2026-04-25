@@ -6,6 +6,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_core::config::{Config, ConfigOverrides};
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -15,36 +16,103 @@ use tracing_subscriber::EnvFilter;
 mod codex_agent;
 mod thread;
 
-const CODEX_ACP_DISABLED_PLUGINS_ENV: &str = "CODEX_ACP_DISABLED_PLUGINS";
-const DEFAULT_CODEX_ACP_DISABLED_PLUGINS: &[&str] =
-    &["computer-use@openai-bundled", "browser-use@openai-bundled"];
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PluginCliOverrides {
+    enable_plugins: Vec<String>,
+    disable_plugins: Vec<String>,
+}
 
-fn default_codex_acp_disabled_plugins() -> Vec<String> {
-    DEFAULT_CODEX_ACP_DISABLED_PLUGINS
-        .iter()
-        .map(|plugin| (*plugin).to_string())
+impl PluginCliOverrides {
+    pub fn new(enable_plugins: Vec<String>, disable_plugins: Vec<String>) -> Result<Self, String> {
+        let enable_plugins = normalize_plugin_ids(enable_plugins);
+        let disable_plugins = normalize_plugin_ids(disable_plugins);
+        let enabled = enable_plugins.iter().collect::<HashSet<_>>();
+
+        if let Some(conflict) = disable_plugins
+            .iter()
+            .find(|plugin_id| enabled.contains(plugin_id))
+        {
+            return Err(format!(
+                "plugin `{conflict}` cannot be both enabled and disabled"
+            ));
+        }
+
+        Ok(Self {
+            enable_plugins,
+            disable_plugins,
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.enable_plugins.is_empty() && self.disable_plugins.is_empty()
+    }
+}
+
+fn normalize_plugin_ids(values: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|plugin_id| !plugin_id.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|plugin_id| seen.insert(plugin_id.clone()))
         .collect()
 }
 
-fn parse_disabled_plugins_override(value: Option<&str>) -> Vec<String> {
-    match value {
-        Some(value) => value
-            .split(',')
-            .map(str::trim)
-            .filter(|plugin| !plugin.is_empty())
-            .map(ToString::to_string)
-            .collect(),
-        None => default_codex_acp_disabled_plugins(),
+fn set_plugin_enabled(user_config: &mut TomlValue, plugin_id: &str, enabled: bool) {
+    let root = ensure_table(user_config);
+    let plugins = root
+        .entry("plugins".to_string())
+        .or_insert_with(empty_toml_table);
+    let plugins = ensure_table(plugins);
+    let plugin = plugins
+        .entry(plugin_id.to_string())
+        .or_insert_with(empty_toml_table);
+    let plugin = ensure_table(plugin);
+    plugin.insert("enabled".to_string(), TomlValue::Boolean(enabled));
+}
+
+fn apply_plugin_cli_overrides_to_user_config(
+    user_config: &mut TomlValue,
+    plugin_overrides: &PluginCliOverrides,
+) {
+    for plugin_id in &plugin_overrides.enable_plugins {
+        set_plugin_enabled(user_config, plugin_id, true);
+    }
+
+    for plugin_id in &plugin_overrides.disable_plugins {
+        set_plugin_enabled(user_config, plugin_id, false);
     }
 }
 
-fn disabled_plugins_from_env() -> Vec<String> {
-    match std::env::var(CODEX_ACP_DISABLED_PLUGINS_ENV) {
-        Ok(value) => parse_disabled_plugins_override(Some(value.as_str())),
-        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => {
-            default_codex_acp_disabled_plugins()
-        }
+fn apply_codex_acp_plugin_overrides(config: &mut Config, plugin_overrides: &PluginCliOverrides) {
+    if plugin_overrides.is_empty() {
+        tracing::debug!("codex-acp plugin overrides are empty");
+        return;
     }
+
+    let mut user_config = config
+        .config_layer_stack
+        .get_user_layer()
+        .map(|layer| layer.config.clone())
+        .unwrap_or_else(empty_toml_table);
+    apply_plugin_cli_overrides_to_user_config(&mut user_config, plugin_overrides);
+
+    let user_config_path =
+        AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &config.codex_home);
+    config.config_layer_stack = config
+        .config_layer_stack
+        .with_user_config(&user_config_path, user_config);
+    tracing::info!(
+        enable_plugins = ?plugin_overrides.enable_plugins,
+        disable_plugins = ?plugin_overrides.disable_plugins,
+        "applied codex-acp plugin CLI overrides"
+    );
 }
 
 fn empty_toml_table() -> TomlValue {
@@ -61,48 +129,6 @@ fn ensure_table(value: &mut TomlValue) -> &mut TomlMap<String, TomlValue> {
         .expect("value was normalized to a TOML table")
 }
 
-fn apply_disabled_plugins_to_user_config(user_config: &mut TomlValue, disabled_plugins: &[String]) {
-    if disabled_plugins.is_empty() {
-        return;
-    }
-
-    let root = ensure_table(user_config);
-    let plugins = root
-        .entry("plugins".to_string())
-        .or_insert_with(empty_toml_table);
-    let plugins = ensure_table(plugins);
-
-    for plugin_id in disabled_plugins {
-        let plugin = plugins
-            .entry(plugin_id.clone())
-            .or_insert_with(empty_toml_table);
-        let plugin = ensure_table(plugin);
-        plugin.insert("enabled".to_string(), TomlValue::Boolean(false));
-    }
-}
-
-fn apply_codex_acp_plugin_policy(config: &mut Config) {
-    let disabled_plugins = disabled_plugins_from_env();
-    if disabled_plugins.is_empty() {
-        tracing::debug!("codex-acp plugin disable policy is empty");
-        return;
-    }
-
-    let mut user_config = config
-        .config_layer_stack
-        .get_user_layer()
-        .map(|layer| layer.config.clone())
-        .unwrap_or_else(empty_toml_table);
-    apply_disabled_plugins_to_user_config(&mut user_config, &disabled_plugins);
-
-    let user_config_path =
-        AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, &config.codex_home);
-    config.config_layer_stack = config
-        .config_layer_stack
-        .with_user_config(&user_config_path, user_config);
-    tracing::info!(?disabled_plugins, "applied codex-acp plugin disable policy");
-}
-
 /// Run the Codex ACP agent.
 ///
 /// This sets up an ACP agent that communicates over stdio, bridging
@@ -114,6 +140,7 @@ fn apply_codex_acp_plugin_policy(config: &mut Config) {
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
+    plugin_overrides: PluginCliOverrides,
 ) -> std::io::Result<()> {
     // Install a simple subscriber so `tracing` output is visible.
     // Users can control the log level with `RUST_LOG`.
@@ -144,7 +171,7 @@ pub async fn run_main(
                     format!("error loading config: {e}"),
                 )
             })?;
-    apply_codex_acp_plugin_policy(&mut config);
+    apply_codex_acp_plugin_overrides(&mut config, &plugin_overrides);
 
     // Apply residency requirement so the HTTP client sends the
     // x-openai-internal-codex-residency header on all requests.
@@ -187,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_acp_plugin_policy_disables_default_host_plugins() {
+    fn empty_plugin_overrides_preserve_config_plugins() {
         let mut user_config = toml::Value::Table(toml::toml! {
             model = "gpt-5"
             [plugins."browser-use@openai-bundled"]
@@ -195,18 +222,15 @@ mod tests {
             extra = "keep"
         });
 
-        apply_disabled_plugins_to_user_config(
-            &mut user_config,
-            &default_codex_acp_disabled_plugins(),
-        );
+        apply_plugin_cli_overrides_to_user_config(&mut user_config, &PluginCliOverrides::default());
 
         assert_eq!(
-            plugin_enabled(&user_config, "computer-use@openai-bundled"),
-            Some(false)
+            plugin_enabled(&user_config, "browser-use@openai-bundled"),
+            Some(true)
         );
         assert_eq!(
-            plugin_enabled(&user_config, "browser-use@openai-bundled"),
-            Some(false)
+            plugin_enabled(&user_config, "computer-use@openai-bundled"),
+            None
         );
         assert_eq!(
             user_config.get("model").and_then(toml::Value::as_str),
@@ -223,15 +247,59 @@ mod tests {
     }
 
     #[test]
-    fn codex_acp_plugin_policy_allows_empty_override_to_disable_policy() {
-        assert!(parse_disabled_plugins_override(Some(" , ")).is_empty());
+    fn plugin_cli_overrides_set_enabled_state_and_preserve_extra_fields() {
+        let mut user_config = toml::Value::Table(toml::toml! {
+            model = "gpt-5"
+            [plugins."browser-use@openai-bundled"]
+            enabled = true
+            extra = "keep"
+        });
+        let plugin_overrides = PluginCliOverrides::new(
+            vec!["documents@openai-primary-runtime".to_string()],
+            vec!["browser-use@openai-bundled".to_string()],
+        )
+        .expect("valid plugin overrides");
+
+        apply_plugin_cli_overrides_to_user_config(&mut user_config, &plugin_overrides);
+
+        assert_eq!(
+            plugin_enabled(&user_config, "documents@openai-primary-runtime"),
+            Some(true)
+        );
+        assert_eq!(
+            plugin_enabled(&user_config, "browser-use@openai-bundled"),
+            Some(false)
+        );
+        assert_eq!(
+            user_config
+                .get("plugins")
+                .and_then(|plugins| plugins.get("browser-use@openai-bundled"))
+                .and_then(|plugin| plugin.get("extra"))
+                .and_then(toml::Value::as_str),
+            Some("keep")
+        );
     }
 
     #[test]
-    fn codex_acp_plugin_policy_parses_custom_override() {
+    fn plugin_cli_overrides_normalize_comma_lists_and_deduplicate() {
         assert_eq!(
-            parse_disabled_plugins_override(Some(" foo ,bar,, baz ")),
-            vec!["foo".to_string(), "bar".to_string(), "baz".to_string()]
+            PluginCliOverrides::new(
+                vec![" foo ,bar,, foo ".to_string()],
+                vec![" baz ".to_string()],
+            )
+            .expect("valid plugin overrides"),
+            PluginCliOverrides {
+                enable_plugins: vec!["foo".to_string(), "bar".to_string()],
+                disable_plugins: vec!["baz".to_string()],
+            }
         );
+    }
+
+    #[test]
+    fn plugin_cli_overrides_reject_conflicts() {
+        let err = PluginCliOverrides::new(vec!["foo".to_string()], vec!["foo".to_string()])
+            .expect_err("conflicting plugin overrides should fail");
+
+        assert!(err.contains("cannot be both enabled and disabled"));
     }
 }
