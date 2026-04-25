@@ -121,3 +121,72 @@ else
   exit 1
 fi
 echo
+
+# 6. Verify release workflow can publish from this fork
+echo "6. Verifying release workflow publishing setup..."
+if grep -q '!github.event.repository.fork' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow still skips npm publishing for forks${NC}"
+  exit 1
+fi
+
+if ! grep -q 'secrets.NPM_TOKEN' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow does not reference secrets.NPM_TOKEN for npm publishing${NC}"
+  exit 1
+fi
+
+if ! grep -q 'npm publish --access public' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should publish scoped packages with --access public${NC}"
+  exit 1
+fi
+
+if ! grep -q 'npm publish --access public --tag latest' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should publish prerelease npm versions with an explicit dist-tag${NC}"
+  exit 1
+fi
+
+if ! grep -q 'HAS_MACOS_SIGNING' .github/workflows/release.yml || ! grep -q 'HAS_WINDOWS_SIGNING' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should make macOS/Windows signing optional${NC}"
+  exit 1
+fi
+
+if ! grep -q 'tag_name=codex-rs-v$VERSION' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow default tag name should follow codex-rs-v<version>${NC}"
+  exit 1
+fi
+
+if ! grep -q 'target_commitish: \${{ github.sha }}' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should create releases from the workflow commit SHA${NC}"
+  exit 1
+fi
+
+if ! grep -q 'reuse_artifacts_run_id' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should support reusing artifacts from a previous run${NC}"
+  exit 1
+fi
+
+if ! grep -q "inputs.reuse_artifacts_run_id == ''" .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should skip Rust builds when reusing artifacts${NC}"
+  exit 1
+fi
+
+if ! grep -q 'gh run download' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should download previous run artifacts when reuse_artifacts_run_id is set${NC}"
+  exit 1
+fi
+
+if ! grep -q 'downloaded-artifacts' .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should flatten reused artifacts from a separate download directory${NC}"
+  exit 1
+fi
+
+if ! grep -q "needs.collect-artifacts.result == 'success'" .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow downstream jobs should run after reused artifact collection succeeds${NC}"
+  exit 1
+fi
+
+if ! grep -q "tr -d '\\\\r\\\\n'" .github/workflows/release.yml; then
+  echo -e "${RED}✗ Release workflow should sanitize NPM_TOKEN before npm publish${NC}"
+  exit 1
+fi
+
+echo -e "${GREEN}✓ Release workflow publishing setup is fork-ready${NC}"

@@ -32,6 +32,7 @@ codex-models-manager = { git = "https://github.com/openai/codex", tag = "rust-v0
 codex-protocol = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-login = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-shell-command = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
+codex-utils-absolute-path = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-utils-approval-presets = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 codex-utils-cli = { git = "https://github.com/openai/codex", tag = "rust-v0.124.0" }
 diffy = "0.4.2"
@@ -54,6 +55,7 @@ serde = { version = "1", features = ["derive"] }
 # that behavior here because it affects MCP keychain account hashing.
 serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1"
+toml = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 tracing = { version = "0.1", features = ["log"] }

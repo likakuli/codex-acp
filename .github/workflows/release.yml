@@ -7,6 +7,10 @@ on:
         description: "Tag name for release (optional - uses version from Cargo.toml if not specified)"
         required: false
         type: string
+      reuse_artifacts_run_id:
+        description: "Previous workflow run id to reuse binary artifacts from (optional; skips Rust builds)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -33,12 +37,13 @@ jobs:
           if [ -n "${{ github.event.inputs.tag_name }}" ]; then
             echo "tag_name=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag_name=v$VERSION" >> $GITHUB_OUTPUT
+            echo "tag_name=codex-rs-v$VERSION" >> $GITHUB_OUTPUT
           fi
 
   build:
     name: Build - ${{ matrix.os }}
     needs: get-version
+    if: ${{ inputs.reuse_artifacts_run_id == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +73,9 @@ jobs:
             binary_extension: ".exe"
 
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_MACOS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.MACOS_CERTIFICATE_PASSWORD != '' && secrets.APPLE_NOTARIZATION_KEY != '' && secrets.APPLE_NOTARIZATION_KEY_ID != '' && secrets.APPLE_NOTARIZATION_ISSUER_ID != '' }}
+      HAS_WINDOWS_SIGNING: ${{ secrets.AZURE_SIGNING_TENANT_ID != '' && secrets.AZURE_SIGNING_CLIENT_ID != '' && secrets.AZURE_SIGNING_CLIENT_SECRET != '' && vars.AZURE_SIGNING_ACCOUNT_NAME != '' && vars.AZURE_SIGNING_CERT_PROFILE_NAME != '' && vars.AZURE_SIGNING_ENDPOINT != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -222,7 +230,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Code sign macOS binary
-        if: startsWith(matrix.os, 'macos')
+        if: ${{ startsWith(matrix.os, 'macos') && env.HAS_MACOS_SIGNING == 'true' }}
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -232,8 +240,13 @@ jobs:
         run: |
           ./script/sign-mac target/${{ matrix.target }}/release/codex-acp
 
+      - name: Skip macOS code signing
+        if: ${{ startsWith(matrix.os, 'macos') && env.HAS_MACOS_SIGNING != 'true' }}
+        run: |
+          echo "Skipping macOS code signing because signing secrets are not configured."
+
       - name: Code sign Windows binary
-        if: startsWith(matrix.os, 'windows')
+        if: ${{ startsWith(matrix.os, 'windows') && env.HAS_WINDOWS_SIGNING == 'true' }}
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_SIGNING_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_SIGNING_CLIENT_ID }}
@@ -246,6 +259,11 @@ jobs:
           TIMESTAMP_SERVER: http://timestamp.acs.microsoft.com
         run: |
           .\script\sign-windows.ps1 target\${{ matrix.target }}\release\codex-acp.exe
+
+      - name: Skip Windows code signing
+        if: ${{ startsWith(matrix.os, 'windows') && env.HAS_WINDOWS_SIGNING != 'true' }}
+        run: |
+          echo "Skipping Windows code signing because signing secrets are not configured."
 
       - name: Create archive
         id: create_archive
@@ -275,9 +293,67 @@ jobs:
           path: ${{ steps.create_archive.outputs.archive_path }}
           retention-days: 1
 
+  collect-artifacts:
+    name: Collect Release Artifacts
+    needs: [get-version, build]
+    if: ${{ always() && (inputs.reuse_artifacts_run_id != '' || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Download current build artifacts
+        if: ${{ inputs.reuse_artifacts_run_id == '' }}
+        uses: actions/download-artifact@v5
+        with:
+          pattern: codex-acp-${{ needs.get-version.outputs.version }}-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Download reused build artifacts
+        if: ${{ inputs.reuse_artifacts_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REUSE_RUN_ID: ${{ inputs.reuse_artifacts_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p downloaded-artifacts artifacts
+          gh run download "${REUSE_RUN_ID}" \
+            --repo "${{ github.repository }}" \
+            --pattern "codex-acp-*" \
+            --dir downloaded-artifacts
+          find downloaded-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} artifacts/ \;
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.get-version.outputs.version }}"
+          count="$(
+            find artifacts -maxdepth 1 -type f \
+              \( -name "codex-acp-${version}-*.tar.gz" -o -name "codex-acp-${version}-*.zip" \) \
+              | wc -l \
+              | tr -d ' '
+          )"
+          if [ "${count}" -ne 8 ]; then
+            echo "Expected 8 binary artifacts for version ${version}, found ${count}."
+            find artifacts -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: artifacts/
+          retention-days: 1
+
   npm-packages:
     name: Create NPM Packages
-    needs: [get-version, build]
+    needs: [get-version, collect-artifacts]
+    if: ${{ always() && needs.collect-artifacts.result == 'success' }}
     runs-on: ubuntu-latest
     outputs:
       packages: ${{ steps.create_packages.outputs.packages }}
@@ -294,8 +370,8 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
+          name: release-artifacts
           path: artifacts
-          merge-multiple: true
 
       - name: Display structure of downloaded files
         run: ls -la artifacts/
@@ -323,12 +399,14 @@ jobs:
   publish-npm-platform:
     name: Publish NPM Platform Packages
     needs: [get-version, npm-packages]
+    if: ${{ always() && needs.npm-packages.result == 'success' }}
     runs-on: ubuntu-latest
-    if: ${{ !github.event.repository.fork }}
     environment: release # Optional: for enhanced security
     permissions:
       contents: read
       id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Setup Node.js
@@ -338,6 +416,15 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Update npm
         run: npm install -g npm@latest
+
+      - name: Sanitize npm token
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sanitized="$(printf '%s' "${NODE_AUTH_TOKEN}" | tr -d '\r\n')"
+          echo "::add-mask::${sanitized}"
+          echo "NODE_AUTH_TOKEN=${sanitized}" >> "$GITHUB_ENV"
 
       - name: Download NPM packages
         uses: actions/download-artifact@v5
@@ -345,13 +432,19 @@ jobs:
           name: npm-packages
           path: npm-packages
 
+      - name: Skip npm platform publish without token
+        if: ${{ env.NODE_AUTH_TOKEN == '' }}
+        run: |
+          echo "Skipping npm platform package publish because secrets.NPM_TOKEN is not configured."
+
       - name: Publish platform packages
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           for pkg in npm-packages/*; do
             if [ -d "$pkg" ]; then
               echo "Publishing $(basename $pkg)..."
               cd "$pkg"
-              npm publish
+              npm publish --access public --tag latest
               cd ../..
             fi
           done
@@ -359,12 +452,14 @@ jobs:
   publish-npm-base:
     name: Publish NPM Base Package
     needs: [get-version, npm-packages, publish-npm-platform]
+    if: ${{ always() && needs.npm-packages.result == 'success' && needs.publish-npm-platform.result == 'success' }}
     runs-on: ubuntu-latest
-    if: ${{ !github.event.repository.fork }}
     environment: release # Optional: for enhanced security
     permissions:
       contents: read
       id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
     steps:
       - name: Setup Node.js
@@ -374,6 +469,15 @@ jobs:
           registry-url: "https://registry.npmjs.org"
       - name: Update npm
         run: npm install -g npm@latest
+
+      - name: Sanitize npm token
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sanitized="$(printf '%s' "${NODE_AUTH_TOKEN}" | tr -d '\r\n')"
+          echo "::add-mask::${sanitized}"
+          echo "NODE_AUTH_TOKEN=${sanitized}" >> "$GITHUB_ENV"
 
       - name: Download base package
         uses: actions/download-artifact@v5
@@ -382,18 +486,26 @@ jobs:
           path: npm
 
       - name: Wait for platform packages to be available
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           echo "Waiting 30 seconds for platform packages to be available on npm..."
           sleep 30
 
+      - name: Skip npm base publish without token
+        if: ${{ env.NODE_AUTH_TOKEN == '' }}
+        run: |
+          echo "Skipping npm base package publish because secrets.NPM_TOKEN is not configured."
+
       - name: Publish base package
+        if: ${{ env.NODE_AUTH_TOKEN != '' }}
         run: |
           cd npm
-          npm publish
+          npm publish --access public --tag latest
 
   create-release:
     name: Create Release
-    needs: [get-version, build, publish-npm-base]
+    needs: [get-version, collect-artifacts, publish-npm-base]
+    if: ${{ always() && needs.collect-artifacts.result == 'success' && needs.publish-npm-base.result == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -402,6 +514,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
+          name: release-artifacts
           path: artifacts
 
       - name: Display structure of downloaded files
@@ -412,6 +525,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.get-version.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           name: Release ${{ needs.get-version.outputs.version }}
           draft: false
           prerelease: false
